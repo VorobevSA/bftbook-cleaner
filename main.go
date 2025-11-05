@@ -11,12 +11,15 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/cometbft/cometbft/crypto/ed25519"
+	"github.com/cometbft/cometbft/p2p/conn"
 )
 
 // AddrBook represents the structure of CometBFT addrbook.json
 type AddrBook struct {
-	Key   string  `json:"key"`
-	Addrs []Addr  `json:"addrs"`
+	Key   string `json:"key"`
+	Addrs []Addr `json:"addrs"`
 }
 
 // Addr represents a single address entry in the addrbook
@@ -45,11 +48,11 @@ type PeerCheckResult struct {
 }
 
 var (
-	inputDir     = flag.String("input", "input", "Directory containing input JSON files")
-	outputFile   = flag.String("output", "output.addrbook.json", "Output file path")
-	workers      = flag.Int("workers", 50, "Number of concurrent workers for peer checking")
-	timeout      = flag.Duration("timeout", 5*time.Second, "Timeout for peer connection check")
-	verbose      = flag.Bool("verbose", false, "Enable verbose logging")
+	inputDir   = flag.String("input", "input", "Directory containing input JSON files")
+	outputFile = flag.String("output", "output.addrbook.json", "Output file path")
+	workers    = flag.Int("workers", 50, "Number of concurrent workers for peer checking")
+	timeout    = flag.Duration("timeout", 5*time.Second, "Timeout for peer connection check")
+	verbose    = flag.Bool("verbose", false, "Enable verbose logging")
 )
 
 func main() {
@@ -223,7 +226,7 @@ func checkPeers(addrs []Addr, numWorkers int, timeout time.Duration) []Addr {
 					if !valid {
 						status = "✗"
 					}
-					log.Printf("%s Checking %s:%d (ID: %s)", status, addr.Addr.IP, addr.Addr.Port, addr.Addr.ID[:8])
+					log.Printf("%s Checking %s:%d (ID: %s) - Port+Handshake", status, addr.Addr.IP, addr.Addr.Port, addr.Addr.ID[:8])
 				}
 			}
 		}()
@@ -256,14 +259,69 @@ func checkPeers(addrs []Addr, numWorkers int, timeout time.Duration) []Addr {
 }
 
 // checkPeer checks if a peer is reachable by attempting a TCP connection
+// and then performs a P2P handshake check if port is open
 func checkPeer(ip string, port int, timeout time.Duration) bool {
-	address := fmt.Sprintf("%s:%d", ip, port)
+	// Use net.JoinHostPort to properly handle IPv6 addresses
+	address := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
+
+	// Step 1: Check if port is open
 	conn, err := net.DialTimeout("tcp", address, timeout)
 	if err != nil {
 		return false
 	}
-	conn.Close()
+	defer conn.Close()
+
+	// Step 2: If port is open, try to perform basic P2P handshake check
+	return checkP2PHandshake(conn, timeout)
+}
+
+// checkP2PHandshake performs a P2P handshake check using CometBFT library
+// It verifies that the peer is a valid CometBFT P2P node by attempting
+// to establish a secret connection handshake
+func checkP2PHandshake(connection net.Conn, timeout time.Duration) bool {
+	// Set connection deadline
+	connection.SetDeadline(time.Now().Add(timeout / 2))
+
+	// Generate a temporary key pair for handshake
+	// We don't need to persist this key, it's just for verification
+	privKey := ed25519.GenPrivKey()
+
+	// Try to establish a secret connection (handshake)
+	// This will verify that the peer is a valid CometBFT node
+	// MakeSecretConnection is a function from p2p/conn package
+	secretConn, err := conn.MakeSecretConnection(connection, privKey)
+	if err != nil {
+		// If handshake fails, the peer might not be a valid CometBFT node
+		// or might be behind a firewall/NAT that doesn't allow full handshake
+		// Fall back to checking if peer sends any data
+		return checkPeerBasicResponse(connection, timeout)
+	}
+	defer secretConn.Close()
+
+	// If we successfully established secret connection, peer is valid
 	return true
+}
+
+// checkPeerBasicResponse performs a basic check to see if peer responds
+// This is a fallback when full handshake fails but peer might still be valid
+// If peer doesn't send any data, it's considered invalid
+func checkPeerBasicResponse(conn net.Conn, timeout time.Duration) bool {
+	// Set read deadline
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	// Try to read any response from the peer
+	// CometBFT nodes typically send some data upon connection
+	buffer := make([]byte, 64)
+	n, _ := conn.Read(buffer)
+
+	// If we read something, peer is responding and is valid
+	if n > 0 {
+		return true
+	}
+
+	// If reading fails (timeout or error), peer is considered invalid
+	// We don't check write capability as it's not a reliable indicator
+	return false
 }
 
 // generateKey generates a key for the output addrbook
