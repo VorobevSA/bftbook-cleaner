@@ -11,6 +11,8 @@ Tool for cleaning CometBFT addrbook files from non-working peers. The program ch
   2. P2P Handshake check using CometBFT library
 - Multi-threaded checking with configurable number of workers
 - Fallback mechanism: if full handshake fails, a basic peer response check is performed
+- For every reachable peer, performs a CometBFT handshake to retrieve and log `NodeInfo`
+- Optional filters by `NodeInfo.network` and `NodeInfo.version`
 - Saves the result to a new clean addrbook file
 
 ## Installation
@@ -30,7 +32,9 @@ go run main.go [options]
 - `-input` - Directory containing input JSON files (default: `input`)
 - `-output` - Output file path (default: `output.addrbook.json`)
 - `-workers` - Number of concurrent workers for peer checking (default: 50)
-- `-timeout` - Timeout for peer connection check (default: 5s)
+- `-timeout` - Timeout for peer connection check and NodeInfo retrieval (default: 5s)
+- `-network` - Keep only peers that report this NodeInfo network (optional)
+- `-version` - Keep only peers that report this NodeInfo version (optional)
 - `-verbose` - Enable verbose logging (default: false)
 
 ### Examples
@@ -47,6 +51,9 @@ go run main.go -verbose
 
 # With increased timeout
 go run main.go -timeout 10s -workers 30
+
+# With NodeInfo-based filtering
+go run main.go -network haqq_11235-1 -version 0.38.19 -timeout 8s
 ```
 
 ## Building
@@ -75,7 +82,8 @@ After building, you can run:
        * Attempts to read data from the peer (CometBFT nodes typically send data upon connection)
        * If reading is successful (data received), the peer is considered valid
        * If reading fails, the peer is rejected as invalid
-5. Saves only working peers (that passed the check) to the output file
+5. For each working peer, performs a short handshake to fetch `NodeInfo`, logs it, and applies optional network/version filters
+6. Saves only peers that passed all checks (including optional filters) to the output file
 
 ## Output file structure
 

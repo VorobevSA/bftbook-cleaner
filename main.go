@@ -12,7 +12,13 @@ import (
 	"sync"
 	"time"
 
+	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
+	"github.com/cometbft/cometbft/libs/protoio"
+	tmp2p "github.com/cometbft/cometbft/proto/tendermint/p2p"
+	"github.com/cometbft/cometbft/version"
+
 	"github.com/cometbft/cometbft/crypto/ed25519"
+	"github.com/cometbft/cometbft/p2p"
 	"github.com/cometbft/cometbft/p2p/conn"
 )
 
@@ -48,11 +54,13 @@ type PeerCheckResult struct {
 }
 
 var (
-	inputDir   = flag.String("input", "input", "Directory containing input JSON files")
-	outputFile = flag.String("output", "output.addrbook.json", "Output file path")
-	workers    = flag.Int("workers", 50, "Number of concurrent workers for peer checking")
-	timeout    = flag.Duration("timeout", 5*time.Second, "Timeout for peer connection check")
-	verbose    = flag.Bool("verbose", false, "Enable verbose logging")
+	inputDir      = flag.String("input", "input", "Directory containing input JSON files")
+	outputFile    = flag.String("output", "output.addrbook.json", "Output file path")
+	workers       = flag.Int("workers", 50, "Number of concurrent workers for peer checking")
+	timeout       = flag.Duration("timeout", 5*time.Second, "Timeout for peer connection and NodeInfo requests")
+	filterNetwork = flag.String("network", "", "Filter peers by NodeInfo network (optional)")
+	filterVersion = flag.String("version", "", "Filter peers by NodeInfo version (optional)")
+	verbose       = flag.Bool("verbose", false, "Enable verbose logging")
 )
 
 func main() {
@@ -115,6 +123,10 @@ func main() {
 
 	log.Printf("Valid peers: %d out of %d", len(validAddrs), len(addrSlice))
 
+	// Fetch NodeInfo details, log them, and apply optional filters
+	finalAddrs := logNodeInfos(validAddrs, *timeout, *filterNetwork, *filterVersion)
+	log.Printf("Peers after NodeInfo filters: %d out of %d", len(finalAddrs), len(validAddrs))
+
 	// Use key from first file or generate new one
 	outputKey := firstKey
 	if outputKey == "" {
@@ -124,7 +136,7 @@ func main() {
 	// Create output addrbook
 	outputBook := AddrBook{
 		Key:   outputKey,
-		Addrs: validAddrs,
+		Addrs: finalAddrs,
 	}
 
 	// Write output file
@@ -300,6 +312,199 @@ func checkP2PHandshake(connection net.Conn, timeout time.Duration) bool {
 
 	// If we successfully established secret connection, peer is valid
 	return true
+}
+
+type nodeInfoResult struct {
+	addr Addr
+	info *p2p.DefaultNodeInfo
+	err  error
+}
+
+// logNodeInfos dials every valid peer, retrieves NodeInfo via the P2P handshake, logs it, and applies optional filters.
+func logNodeInfos(addrs []Addr, timeout time.Duration, networkFilter, versionFilter string) []Addr {
+	if len(addrs) == 0 {
+		return nil
+	}
+
+	workerCount := *workers
+	if workerCount <= 0 {
+		workerCount = 1
+	}
+
+	if *verbose {
+		log.Printf("Fetching NodeInfo for %d peers using %d workers...", len(addrs), workerCount)
+	}
+
+	addrChan := make(chan Addr, len(addrs))
+	resultChan := make(chan nodeInfoResult, len(addrs))
+
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for addr := range addrChan {
+				info, err := fetchNodeInfo(addr.Addr.IP, addr.Addr.Port, timeout)
+				resultChan <- nodeInfoResult{
+					addr: addr,
+					info: info,
+					err:  err,
+				}
+			}
+		}()
+	}
+
+	go func() {
+		for _, addr := range addrs {
+			addrChan <- addr
+		}
+		close(addrChan)
+	}()
+
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	filtered := make([]Addr, 0, len(addrs))
+	for result := range resultChan {
+		if result.err != nil {
+			if *verbose {
+				log.Printf(
+					"NodeInfo: %s:%d (ID: %s) error: %v",
+					result.addr.Addr.IP,
+					result.addr.Addr.Port,
+					shortID(result.addr.Addr.ID),
+					result.err,
+				)
+			}
+			continue
+		}
+
+		info := result.info
+		if *verbose {
+			log.Printf(
+				"NodeInfo: %s:%d (ID: %s) moniker=%s network=%s version=%s proto[p2p=%d block=%d app=%d] listen=%s tx_index=%s rpc=%s",
+				result.addr.Addr.IP,
+				result.addr.Addr.Port,
+				shortID(result.addr.Addr.ID),
+				info.Moniker,
+				info.Network,
+				info.Version,
+				info.ProtocolVersion.P2P,
+				info.ProtocolVersion.Block,
+				info.ProtocolVersion.App,
+				info.ListenAddr,
+				info.Other.TxIndex,
+				info.Other.RPCAddress,
+			)
+		}
+
+		if networkFilter != "" && info.Network != networkFilter {
+			if *verbose {
+				log.Printf("NodeInfo filter: dropping %s (network %s != %s)", shortID(result.addr.Addr.ID), info.Network, networkFilter)
+			}
+			continue
+		}
+		if versionFilter != "" && info.Version != versionFilter {
+			if *verbose {
+				log.Printf("NodeInfo filter: dropping %s (version %s != %s)", shortID(result.addr.Addr.ID), info.Version, versionFilter)
+			}
+			continue
+		}
+
+		filtered = append(filtered, result.addr)
+	}
+
+	return filtered
+}
+
+// fetchNodeInfo establishes a short-lived P2P session and retrieves the peer's NodeInfo.
+func fetchNodeInfo(ip string, port int, timeout time.Duration) (*p2p.DefaultNodeInfo, error) {
+	address := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
+	tcpConn, err := net.DialTimeout("tcp", address, timeout)
+	if err != nil {
+		return nil, fmt.Errorf("dial failed: %w", err)
+	}
+	defer tcpConn.Close()
+
+	privKey := ed25519.GenPrivKey()
+	secretConn, err := conn.MakeSecretConnection(tcpConn, privKey)
+	if err != nil {
+		return nil, fmt.Errorf("secret connection failed: %w", err)
+	}
+	defer secretConn.Close()
+
+	localInfo := buildLocalNodeInfo(privKey)
+	peerInfo, err := exchangeNodeInfo(secretConn, timeout, localInfo)
+	if err != nil {
+		return nil, err
+	}
+
+	return &peerInfo, nil
+}
+
+// exchangeNodeInfo replicates the CometBFT handshake to read peer NodeInfo.
+func exchangeNodeInfo(c net.Conn, timeout time.Duration, ourInfo p2p.DefaultNodeInfo) (p2p.DefaultNodeInfo, error) {
+	if err := c.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return p2p.DefaultNodeInfo{}, err
+	}
+
+	errc := make(chan error, 2)
+	var remote tmp2p.DefaultNodeInfo
+
+	go func() {
+		_, err := protoio.NewDelimitedWriter(c).WriteMsg(ourInfo.ToProto())
+		errc <- err
+	}()
+
+	go func() {
+		reader := protoio.NewDelimitedReader(c, p2p.MaxNodeInfoSize())
+		_, err := reader.ReadMsg(&remote)
+		errc <- err
+	}()
+
+	for i := 0; i < cap(errc); i++ {
+		if err := <-errc; err != nil {
+			return p2p.DefaultNodeInfo{}, err
+		}
+	}
+
+	if err := c.SetDeadline(time.Time{}); err != nil {
+		return p2p.DefaultNodeInfo{}, err
+	}
+
+	info, err := p2p.DefaultNodeInfoFromToProto(&remote)
+	if err != nil {
+		return p2p.DefaultNodeInfo{}, err
+	}
+
+	return info, nil
+}
+
+// buildLocalNodeInfo creates a minimal NodeInfo that passes validation for handshake purposes.
+func buildLocalNodeInfo(privKey ed25519.PrivKey) p2p.DefaultNodeInfo {
+	return p2p.DefaultNodeInfo{
+		ProtocolVersion: p2p.NewProtocolVersion(version.P2PProtocol, version.BlockProtocol, 0),
+		DefaultNodeID:   p2p.PubKeyToID(privKey.PubKey()),
+		ListenAddr:      "0.0.0.0:0",
+		Network:         "",
+		Version:         version.TMCoreSemVer,
+		Channels:        cmtbytes.HexBytes{},
+		Moniker:         "addrbook-cleaner",
+		Other: p2p.DefaultNodeInfoOther{
+			TxIndex:    "off",
+			RPCAddress: "",
+		},
+	}
+}
+
+// shortID returns a shortened peer ID for cleaner log lines.
+func shortID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 // checkPeerBasicResponse performs a basic check to see if peer responds

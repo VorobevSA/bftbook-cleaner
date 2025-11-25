@@ -17,3 +17,5 @@ output.addrbook.json
 # Go workspace file
 go.work
 /input
+*.json
+cometbft-addrbook-cleaner
