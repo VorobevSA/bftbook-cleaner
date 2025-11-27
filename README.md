@@ -15,6 +15,11 @@ Tool for cleaning CometBFT addrbook files from non-working peers. The program ch
 - Optional filters by `NodeInfo.network` and `NodeInfo.version`
 - Saves the result to a new clean addrbook file
 
+## Requirements
+
+- Go 1.25 or newer (the module and dependencies rely on Go 1.25 features)
+- Network access to reach peers
+
 ## Installation
 
 ```bash
@@ -24,7 +29,7 @@ go mod download
 ## Usage
 
 ```bash
-go run main.go [options]
+go run ./... [options]
 ```
 
 ### Parameters
@@ -41,7 +46,7 @@ go run main.go [options]
 ### Examples
 
 ```bash
-# Basic usage
+# Basic usage (uses default settings)
 go run ./...
 
 # With specified directory and number of workers
@@ -57,16 +62,16 @@ go run ./... -timeout 10s -workers 30
 go run ./... -network haqq_11235-1 -version 0.38.19 -timeout 8s
 
 # With manual list file
-go run ./... -manual-list input/manual.list
+go run ./... -manual-list input/example.list
 
 # Combine JSON files and manual list
-go run ./... -input input -manual-list input/manual.list -output output.addrbook.json
+go run ./... -input input -manual-list input/example.list -output clean.addrbook.json
 ```
 
 ## Building
 
 ```bash
-go build -o bftbook-cleaner main.go
+go build -o bftbook-cleaner ./...
 ```
 
 After building, you can run:
@@ -74,6 +79,11 @@ After building, you can run:
 ```bash
 ./bftbook-cleaner -input input -output output.addrbook.json -workers 50
 ```
+
+## Tooling
+
+- Linting: `golangci-lint run --timeout=5m`
+- Vulnerability scan: `govulncheck ./...` (run with Go ≥ 1.25)
 
 ## How it works
 
