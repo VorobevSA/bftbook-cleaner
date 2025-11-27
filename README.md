@@ -42,37 +42,37 @@ go run main.go [options]
 
 ```bash
 # Basic usage
-go run main.go
+go run ./...
 
 # With specified directory and number of workers
-go run main.go -input input -output clean.addrbook.json -workers 100
+go run ./... -input input -output clean.addrbook.json -workers 100
 
 # With verbose output
-go run main.go -verbose
+go run ./... -verbose
 
 # With increased timeout
-go run main.go -timeout 10s -workers 30
+go run ./... -timeout 10s -workers 30
 
 # With NodeInfo-based filtering
-go run main.go -network haqq_11235-1 -version 0.38.19 -timeout 8s
+go run ./... -network haqq_11235-1 -version 0.38.19 -timeout 8s
 
 # With manual list file
-go run main.go -manual-list input/manual.list
+go run ./... -manual-list input/manual.list
 
 # Combine JSON files and manual list
-go run main.go -input input -manual-list input/manual.list -output output.addrbook.json
+go run ./... -input input -manual-list input/manual.list -output output.addrbook.json
 ```
 
 ## Building
 
 ```bash
-go build -o addrbook-cleaner main.go
+go build -o bftbook-cleaner main.go
 ```
 
 After building, you can run:
 
 ```bash
-./addrbook-cleaner -input input -output output.addrbook.json -workers 50
+./bftbook-cleaner -input input -output output.addrbook.json -workers 50
 ```
 
 ## How it works
