@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,9 +57,15 @@ type PeerCheckResult struct {
 	Valid bool
 }
 
+const (
+	addrBookBucketTypeNew  byte = 0x01
+	addrBookNewBucketCount      = 256
+)
+
 var (
 	inputDir      = flag.String("input", "input", "Directory containing input JSON files")
 	outputFile    = flag.String("output", "output.addrbook.json", "Output file path")
+	manualList    = flag.String("manual-list", "", "Path to manual list file with peers in format ID@IP:PORT (one per line)")
 	workers       = flag.Int("workers", 50, "Number of concurrent workers for peer checking")
 	timeout       = flag.Duration("timeout", 5*time.Second, "Timeout for peer connection and NodeInfo requests")
 	filterNetwork = flag.String("network", "", "Filter peers by NodeInfo network (optional)")
@@ -72,41 +82,55 @@ func main() {
 	log.Printf("Workers: %d", *workers)
 	log.Printf("Timeout: %s", *timeout)
 
-	// Read all JSON files from input directory
-	jsonFiles, err := findJSONFiles(*inputDir)
-	if err != nil {
-		log.Fatalf("Error finding JSON files: %v", err)
-	}
-
-	if len(jsonFiles) == 0 {
-		log.Fatalf("No JSON files found in directory: %s", *inputDir)
-	}
-
-	log.Printf("Found %d JSON files to process", len(jsonFiles))
-
 	// Read and parse all addrbooks
 	allAddrs := make(map[string]Addr) // Use map to deduplicate by peer ID
 	var firstKey string
 	firstKeySet := false
 
-	for _, file := range jsonFiles {
-		log.Printf("Reading file: %s", file)
-		addrBook, addrs, err := readAddrBook(file)
+	// Read JSON files from input directory
+	jsonFiles, err := findJSONFiles(*inputDir)
+	if err != nil {
+		log.Printf("Warning: error finding JSON files in %s: %v", *inputDir, err)
+	} else if len(jsonFiles) > 0 {
+		log.Printf("Found %d JSON files to process", len(jsonFiles))
+		for _, file := range jsonFiles {
+			log.Printf("Reading file: %s", file)
+			addrBook, addrs, err := readAddrBook(file)
+			if err != nil {
+				log.Printf("Warning: failed to read %s: %v", file, err)
+				continue
+			}
+
+			// Save key from first file
+			if !firstKeySet && addrBook.Key != "" {
+				firstKey = addrBook.Key
+				firstKeySet = true
+			}
+
+			for _, addr := range addrs {
+				// Use peer ID as key to avoid duplicates
+				allAddrs[addr.Addr.ID] = addr
+			}
+		}
+	}
+
+	// Read manual list file if provided
+	if *manualList != "" {
+		log.Printf("Reading manual list: %s", *manualList)
+		manualAddrs, err := readManualList(*manualList)
 		if err != nil {
-			log.Printf("Warning: failed to read %s: %v", file, err)
-			continue
+			log.Printf("Warning: failed to read manual list %s: %v", *manualList, err)
+		} else {
+			log.Printf("Found %d peers in manual list", len(manualAddrs))
+			for _, addr := range manualAddrs {
+				// Use peer ID as key to avoid duplicates
+				allAddrs[addr.Addr.ID] = addr
+			}
 		}
+	}
 
-		// Save key from first file
-		if !firstKeySet && addrBook.Key != "" {
-			firstKey = addrBook.Key
-			firstKeySet = true
-		}
-
-		for _, addr := range addrs {
-			// Use peer ID as key to avoid duplicates
-			allAddrs[addr.Addr.ID] = addr
-		}
+	if len(allAddrs) == 0 {
+		log.Fatalf("No peers found. Please provide JSON files in %s directory or use -manual-list flag", *inputDir)
 	}
 
 	log.Printf("Total unique peers found: %d", len(allAddrs))
@@ -138,6 +162,9 @@ func main() {
 		Key:   outputKey,
 		Addrs: finalAddrs,
 	}
+
+	// Update timestamps for all peers in the output
+	updatePeerTimestamps(outputBook.Addrs)
 
 	// Write output file
 	if err := writeAddrBook(*outputFile, outputBook); err != nil {
@@ -184,6 +211,102 @@ func readAddrBook(filepath string) (*AddrBook, []Addr, error) {
 	}
 
 	return &addrBook, addrBook.Addrs, nil
+}
+
+// readManualList reads a manual list file with peers in format ID@IP:PORT (one per line)
+// Returns a slice of Addr entries parsed from the file
+func readManualList(filepath string) ([]Addr, error) {
+	file, err := os.Open(filepath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var addrs []Addr
+	scanner := bufio.NewScanner(file)
+	lineNum := 0
+	defaultTimestamp := time.Now().UTC().Format(time.RFC3339)
+	defaultBanTime := "0001-01-01T00:00:00Z"
+
+	for scanner.Scan() {
+		lineNum++
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Parse format: ID@IP:PORT
+		parts := strings.Split(line, "@")
+		if len(parts) != 2 {
+			log.Printf("Warning: invalid format at line %d in %s: %s (expected ID@IP:PORT)", lineNum, filepath, line)
+			continue
+		}
+
+		id := strings.TrimSpace(parts[0])
+		addrPart := strings.TrimSpace(parts[1])
+
+		// Parse IP:PORT
+		host, portStr, err := net.SplitHostPort(addrPart)
+		if err != nil {
+			log.Printf("Warning: invalid address format at line %d in %s: %s (error: %v)", lineNum, filepath, line, err)
+			continue
+		}
+
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			log.Printf("Warning: invalid port at line %d in %s: %s (error: %v)", lineNum, filepath, line, err)
+			continue
+		}
+
+		// Create Addr entry
+		addr := Addr{
+			Addr: Address{
+				ID:   id,
+				IP:   host,
+				Port: port,
+			},
+			Src: Address{
+				ID:   id,
+				IP:   host,
+				Port: port,
+			},
+			Buckets:     []int{manualBucketIndex(id)},
+			Attempts:    0,
+			BucketType:  int(addrBookBucketTypeNew),
+			LastAttempt: defaultTimestamp,
+			LastSuccess: defaultTimestamp,
+			LastBanTime: defaultBanTime,
+		}
+
+		addrs = append(addrs, addr)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading file: %w", err)
+	}
+
+	return addrs, nil
+}
+
+func manualBucketIndex(id string) int {
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(id))
+	return int(hasher.Sum32() % uint32(addrBookNewBucketCount))
+}
+
+// updatePeerTimestamps updates timestamp-related fields for all peers
+func updatePeerTimestamps(addrs []Addr) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	defaultBan := "0001-01-01T00:00:00Z"
+
+	for i := range addrs {
+		addrs[i].Attempts = 0
+		addrs[i].LastAttempt = now
+		addrs[i].LastSuccess = now
+		addrs[i].LastBanTime = defaultBan
+	}
 }
 
 // checkPeers checks peer availability concurrently using workers
@@ -283,14 +406,24 @@ func checkPeer(ip string, port int, timeout time.Duration) bool {
 	}
 	defer conn.Close()
 
-	// Step 2: If port is open, try to perform basic P2P handshake check
-	return checkP2PHandshake(conn, timeout)
+	// Step 2: If port is open, try to perform P2P handshake check
+	// If handshake succeeds, peer is definitely valid
+	// If handshake fails, we still consider peer valid if port is open
+	// (some peers may not respond to handshake but are still reachable)
+	handshakeSuccess := checkP2PHandshake(conn, ip, port, timeout)
+	if handshakeSuccess {
+		return true
+	}
+
+	// Port is open, so consider peer valid even if handshake failed
+	// The NodeInfo check later will verify if it's actually a CometBFT node
+	return true
 }
 
 // checkP2PHandshake performs a P2P handshake check using CometBFT library
 // It verifies that the peer is a valid CometBFT P2P node by attempting
 // to establish a secret connection handshake
-func checkP2PHandshake(connection net.Conn, timeout time.Duration) bool {
+func checkP2PHandshake(connection net.Conn, ip string, port int, timeout time.Duration) bool {
 	// Set connection deadline
 	connection.SetDeadline(time.Now().Add(timeout / 2))
 
@@ -305,8 +438,9 @@ func checkP2PHandshake(connection net.Conn, timeout time.Duration) bool {
 	if err != nil {
 		// If handshake fails, the peer might not be a valid CometBFT node
 		// or might be behind a firewall/NAT that doesn't allow full handshake
-		// Fall back to checking if peer sends any data
-		return checkPeerBasicResponse(connection, timeout)
+		// Close the current connection and try a fresh connection for basic check
+		connection.Close()
+		return checkPeerBasicResponse(ip, port, timeout)
 	}
 	defer secretConn.Close()
 
@@ -331,12 +465,33 @@ func logNodeInfos(addrs []Addr, timeout time.Duration, networkFilter, versionFil
 		workerCount = 1
 	}
 
-	if *verbose {
-		log.Printf("Fetching NodeInfo for %d peers using %d workers...", len(addrs), workerCount)
-	}
+	log.Printf("Fetching NodeInfo for %d peers using %d workers...", len(addrs), workerCount)
 
 	addrChan := make(chan Addr, len(addrs))
 	resultChan := make(chan nodeInfoResult, len(addrs))
+
+	// Progress tracking
+	var mu sync.Mutex
+	checked := 0
+	total := len(addrs)
+
+	// Start progress reporter
+	stopProgress := make(chan bool)
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				mu.Lock()
+				current := checked
+				mu.Unlock()
+				log.Printf("Progress: %d/%d NodeInfo fetched (%.1f%%)", current, total, float64(current)/float64(total)*100)
+			case <-stopProgress:
+				return
+			}
+		}
+	}()
 
 	var wg sync.WaitGroup
 	for i := 0; i < workerCount; i++ {
@@ -364,20 +519,23 @@ func logNodeInfos(addrs []Addr, timeout time.Duration, networkFilter, versionFil
 	go func() {
 		wg.Wait()
 		close(resultChan)
+		stopProgress <- true
 	}()
 
 	filtered := make([]Addr, 0, len(addrs))
 	for result := range resultChan {
+		mu.Lock()
+		checked++
+		mu.Unlock()
+
 		if result.err != nil {
-			if *verbose {
-				log.Printf(
-					"NodeInfo: %s:%d (ID: %s) error: %v",
-					result.addr.Addr.IP,
-					result.addr.Addr.Port,
-					shortID(result.addr.Addr.ID),
-					result.err,
-				)
-			}
+			log.Printf(
+				"%s@%s:%d error: %v",
+				result.addr.Addr.ID,
+				result.addr.Addr.IP,
+				result.addr.Addr.Port,
+				result.err,
+			)
 			continue
 		}
 
@@ -428,12 +586,22 @@ func fetchNodeInfo(ip string, port int, timeout time.Duration) (*p2p.DefaultNode
 	}
 	defer tcpConn.Close()
 
+	// Set deadline for secret connection handshake
+	if err := tcpConn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, fmt.Errorf("failed to set deadline: %w", err)
+	}
+
 	privKey := ed25519.GenPrivKey()
 	secretConn, err := conn.MakeSecretConnection(tcpConn, privKey)
 	if err != nil {
 		return nil, fmt.Errorf("secret connection failed: %w", err)
 	}
 	defer secretConn.Close()
+
+	// Reset deadline for NodeInfo exchange
+	if err := secretConn.SetDeadline(time.Time{}); err != nil {
+		return nil, fmt.Errorf("failed to reset deadline: %w", err)
+	}
 
 	localInfo := buildLocalNodeInfo(privKey)
 	peerInfo, err := exchangeNodeInfo(secretConn, timeout, localInfo)
@@ -464,9 +632,18 @@ func exchangeNodeInfo(c net.Conn, timeout time.Duration, ourInfo p2p.DefaultNode
 		errc <- err
 	}()
 
-	for i := 0; i < cap(errc); i++ {
-		if err := <-errc; err != nil {
-			return p2p.DefaultNodeInfo{}, err
+	// Wait for both operations with timeout
+	timeoutCh := time.After(timeout)
+	completed := 0
+	for completed < 2 {
+		select {
+		case err := <-errc:
+			if err != nil {
+				return p2p.DefaultNodeInfo{}, err
+			}
+			completed++
+		case <-timeoutCh:
+			return p2p.DefaultNodeInfo{}, fmt.Errorf("timeout waiting for NodeInfo exchange")
 		}
 	}
 
@@ -509,8 +686,16 @@ func shortID(id string) string {
 
 // checkPeerBasicResponse performs a basic check to see if peer responds
 // This is a fallback when full handshake fails but peer might still be valid
-// If peer doesn't send any data, it's considered invalid
-func checkPeerBasicResponse(conn net.Conn, timeout time.Duration) bool {
+// Creates a fresh connection to check if peer sends any data
+func checkPeerBasicResponse(ip string, port int, timeout time.Duration) bool {
+	// Create a fresh connection for basic check
+	address := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
+	conn, err := net.DialTimeout("tcp", address, timeout)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+
 	// Set read deadline
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 
