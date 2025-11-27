@@ -159,7 +159,7 @@ func (c *Cleaner) fetchNodeInfo(ctx context.Context, addr Addr) (*peerNodeInfo, 
 	if err != nil {
 		return nil, fmt.Errorf("dial failed: %w", err)
 	}
-	defer tcpConn.Close()
+	defer closeWithLog(c.log, tcpConn, address)
 
 	if err := tcpConn.SetDeadline(c.now().Add(c.cfg.Timeout)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)
@@ -170,7 +170,7 @@ func (c *Cleaner) fetchNodeInfo(ctx context.Context, addr Addr) (*peerNodeInfo, 
 	if err != nil {
 		return nil, fmt.Errorf("secret connection failed: %w", err)
 	}
-	defer secretConn.Close()
+	defer closeWithLog(c.log, secretConn, address)
 
 	if err := secretConn.SetDeadline(time.Time{}); err != nil {
 		return nil, fmt.Errorf("reset deadline: %w", err)

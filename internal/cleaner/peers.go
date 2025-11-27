@@ -115,7 +115,7 @@ func (c *Cleaner) checkPeer(ctx context.Context, addr Addr) bool {
 	if err != nil {
 		return false
 	}
-	defer conn.Close()
+	defer closeWithLog(c.log, conn, address)
 
 	if c.checkP2PHandshake(ctx, conn, addr) {
 		return true
@@ -132,10 +132,10 @@ func (c *Cleaner) checkP2PHandshake(ctx context.Context, connection net.Conn, ad
 	privKey := ed25519.GenPrivKey()
 	secretConn, err := conn.MakeSecretConnection(connection, privKey)
 	if err != nil {
-		_ = connection.Close()
+		closeWithLog(c.log, connection, addr.Addr.IP)
 		return c.checkPeerBasicResponse(ctx, addr)
 	}
-	defer secretConn.Close()
+	defer closeWithLog(c.log, secretConn, addr.Addr.IP)
 
 	return true
 }
@@ -148,7 +148,7 @@ func (c *Cleaner) checkPeerBasicResponse(ctx context.Context, addr Addr) bool {
 	if err != nil {
 		return false
 	}
-	defer conn.Close()
+	defer closeWithLog(c.log, conn, address)
 
 	readTimeout := c.cfg.Timeout
 	if readTimeout > 2*time.Second {
