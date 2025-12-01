@@ -91,7 +91,7 @@ func (c *Cleaner) readAddrBook(path string) (*AddrBook, []Addr, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	defer closeWithLog(c.log, file, path)
+	defer closeWithLog(c.log, file, path, c.cfg.Verbose)
 
 	data, err := io.ReadAll(file)
 	if err != nil {
@@ -111,7 +111,7 @@ func (c *Cleaner) readManualList(path string) ([]Addr, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer closeWithLog(c.log, file, path)
+	defer closeWithLog(c.log, file, path, c.cfg.Verbose)
 
 	var addrs []Addr
 	scanner := bufio.NewScanner(file)

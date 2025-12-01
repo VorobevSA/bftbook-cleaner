@@ -22,14 +22,46 @@ Tool for cleaning CometBFT addrbook files from non-working peers. The program ch
 
 ## Installation
 
+### Build and install
+
+You can build the binary using Makefile:
+
 ```bash
-go mod download
+make build
 ```
+
+This will create `bftbook-cleaner` binary in the current directory.
+
+To install the binary to your `$GOPATH/bin` (or `$GOBIN` if set):
+
+```bash
+make install
+```
+
+After installation, make sure `$GOPATH/bin` (or `$GOBIN`) is in your `PATH` environment variable to use the `bftbook-cleaner` command from anywhere.
 
 ## Usage
 
+### Running from source
+
 ```bash
-go run ./... [options]
+go run . [options]
+```
+
+### Running installed binary
+
+If you installed the program using `make install`, you can run it directly:
+
+```bash
+bftbook-cleaner [options]
+```
+
+### Running local binary
+
+If you built the binary using `make build`, run it with:
+
+```bash
+./bftbook-cleaner [options]
 ```
 
 ### Parameters
@@ -45,39 +77,62 @@ go run ./... [options]
 
 ### Examples
 
+#### Running from source
+
 ```bash
 # Basic usage (uses default settings)
-go run ./...
-
-# With specified directory and number of workers
-go run ./... -input input -output clean.addrbook.json -workers 100
+go run .
 
 # With verbose output
-go run ./... -verbose
-
-# With increased timeout
-go run ./... -timeout 10s -workers 30
-
-# With NodeInfo-based filtering
-go run ./... -network haqq_11235-1 -version 0.38.19 -timeout 8s
-
-# With manual list file
-go run ./... -manual-list input/example.list
+go run . -verbose
 
 # Combine JSON files and manual list
-go run ./... -input input -manual-list input/example.list -output clean.addrbook.json
+go run . -input input -manual-list input/example.list -output clean.addrbook.json -workers 100 -network haqq_11235-1 -version 0.38.19
+```
+
+#### Running installed binary
+
+After `make install`, you can use the program from anywhere:
+
+```bash
+# Basic usage
+bftbook-cleaner
+
+# With specified directory and number of workers
+bftbook-cleaner -input input -output clean.addrbook.json -workers 100
+
+# With verbose output
+bftbook-cleaner -verbose
+
+# With increased timeout
+bftbook-cleaner -timeout 10s -workers 30
+
+# With NodeInfo-based filtering
+bftbook-cleaner -network haqq_11235-1 -version 0.38.19 -timeout 8s
+
+# With manual list file
+bftbook-cleaner -manual-list input/example.list
+
+# Combine JSON files and manual list
+bftbook-cleaner -input input -manual-list input/example.list -output clean.addrbook.json -network haqq_11235-1 -version 0.38.19
 ```
 
 ## Building
 
+### Using Makefile (recommended)
+
 ```bash
-go build -o bftbook-cleaner ./...
+# Build binary in current directory
+make build
+
+# Install to $GOPATH/bin
+make install
 ```
 
-After building, you can run:
+### Manual build
 
 ```bash
-./bftbook-cleaner -input input -output output.addrbook.json -workers 50
+go build -o bftbook-cleaner .
 ```
 
 ## Tooling

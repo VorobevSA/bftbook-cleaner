@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"cometbft-addrbook-cleaner/internal/cleaner"
+	"bftbook-cleaner/internal/cleaner"
 )
 
 func main() {
