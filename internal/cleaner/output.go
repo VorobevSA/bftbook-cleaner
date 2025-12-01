@@ -26,7 +26,7 @@ func (c *Cleaner) writeAddrBook(book AddrBook) error {
 	if err != nil {
 		return err
 	}
-	defer closeWithLog(c.log, file, c.cfg.OutputFile)
+	defer closeWithLog(c.log, file, c.cfg.OutputFile, c.cfg.Verbose)
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "\t")

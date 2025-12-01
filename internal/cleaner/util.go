@@ -5,11 +5,11 @@ import (
 	"log"
 )
 
-func closeWithLog(logger *log.Logger, closer io.Closer, label string) {
+func closeWithLog(logger *log.Logger, closer io.Closer, label string, verbose bool) {
 	if closer == nil {
 		return
 	}
-	if err := closer.Close(); err != nil && logger != nil {
+	if err := closer.Close(); err != nil && logger != nil && verbose {
 		logger.Printf("Warning: failed to close %s: %v", label, err)
 	}
 }
