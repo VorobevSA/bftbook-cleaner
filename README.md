@@ -29,7 +29,7 @@ go mod download
 ## Usage
 
 ```bash
-go run ./... [options]
+go run . [options]
 ```
 
 ### Parameters
@@ -47,31 +47,31 @@ go run ./... [options]
 
 ```bash
 # Basic usage (uses default settings)
-go run ./...
+go run .
 
 # With specified directory and number of workers
-go run ./... -input input -output clean.addrbook.json -workers 100
+go run . -input input -output clean.addrbook.json -workers 100
 
 # With verbose output
-go run ./... -verbose
+go run . -verbose
 
 # With increased timeout
-go run ./... -timeout 10s -workers 30
+go run . -timeout 10s -workers 30
 
 # With NodeInfo-based filtering
-go run ./... -network haqq_11235-1 -version 0.38.19 -timeout 8s
+go run . -network haqq_11235-1 -version 0.38.19 -timeout 8s
 
 # With manual list file
-go run ./... -manual-list input/example.list
+go run . -manual-list input/example.list
 
 # Combine JSON files and manual list
-go run ./... -input input -manual-list input/example.list -output clean.addrbook.json
+go run . -input input -manual-list input/example.list -output clean.addrbook.json -network haqq_11235-1 -version 0.38.19
 ```
 
 ## Building
 
 ```bash
-go build -o bftbook-cleaner ./...
+go build -o bftbook-cleaner .
 ```
 
 After building, you can run:

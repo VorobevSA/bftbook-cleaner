@@ -1,4 +1,4 @@
-module cometbft-addrbook-cleaner
+module bftbook-cleaner
 
 go 1.25
 
