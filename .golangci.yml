@@ -1,0 +1,60 @@
+version: "2"
+run:
+  concurrency: 4
+  go: "1.25.0"
+  tests: true
+issues:
+  max-issues-per-linter: 100
+  max-same-issues: 10
+linters:
+  enable:
+    - asciicheck
+    - dogsled
+    - dupl
+    - goconst
+    - gocritic
+    - gomodguard
+    - gosec
+    - misspell
+    - nakedret
+    - nolintlint
+    - prealloc
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - errcheck
+    - gocyclo
+    - mnd
+    - ineffassign
+    - unused
+  settings:
+    dogsled:
+      max-blank-identifiers: 3
+    dupl:
+      threshold: 150
+    misspell:
+      locale: US
+    nolintlint:
+      require-explanation: false
+      require-specific: false
+      allow-unused: false
+    staticcheck:
+      checks:
+        - -SA1019
+        - All
+    gocyclo:
+      min-complexity: 15
+    mnd:
+      checks:
+        - argument
+        - case
+        - condition
+        - operation
+        - return
+        - assign
+formatters:
+  enable:
+    - gofumpt
+  exclusions:
+    generated: lax
