@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,58 +37,25 @@ func (c *Cleaner) enrichWithNodeInfo(ctx context.Context, addrs []Addr) ([]Addr,
 	var checked atomic.Int64
 	total := int64(len(addrs))
 
-	progressCtx, progressCancel := context.WithCancel(context.Background())
+	// Progress reporter
+	progressCancel := startProgressReporter(
+		&checked,
+		total,
+		"Progress: %d/%d NodeInfo fetched (%.1f%%)",
+		c.log,
+	)
 	defer progressCancel()
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				current := checked.Load()
-				percent := float64(current) / float64(total) * 100
-				c.log.Printf("Progress: %d/%d NodeInfo fetched (%.1f%%)", current, total, percent)
-			case <-progressCtx.Done():
-				return
-			}
-		}
-	}()
 
-	var wg sync.WaitGroup
-	for i := 0; i < workerCount; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case addr, ok := <-addrChan:
-					if !ok {
-						return
-					}
-					info, err := c.fetchNodeInfo(ctx, addr)
-					select {
-					case <-ctx.Done():
-						return
-					case resultChan <- nodeInfoResult{addr: addr, info: info, err: err}:
-					}
-				}
-			}
-		}()
-	}
+	// Start workers
+	wg := startWorkers(ctx, workerCount, addrChan, resultChan, func(ctx context.Context, addr Addr) nodeInfoResult {
+		info, err := c.fetchNodeInfo(ctx, addr)
+		return nodeInfoResult{addr: addr, info: info, err: err}
+	})
 
-	go func() {
-		defer close(addrChan)
-		for _, addr := range addrs {
-			select {
-			case <-ctx.Done():
-				return
-			case addrChan <- addr:
-			}
-		}
-	}()
+	// Feed items to workers
+	feedItems(ctx, addrs, addrChan)
 
+	// Close result channel when all workers are done
 	go func() {
 		wg.Wait()
 		close(resultChan)
@@ -161,7 +127,7 @@ func (c *Cleaner) fetchNodeInfo(ctx context.Context, addr Addr) (*peerNodeInfo, 
 	}
 	defer closeWithLog(c.log, tcpConn, address, c.cfg.Verbose)
 
-	if err := tcpConn.SetDeadline(c.now().Add(c.cfg.Timeout)); err != nil {
+	if err := tcpConn.SetDeadline(time.Now().Add(c.cfg.Timeout)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)
 	}
 
@@ -189,42 +155,62 @@ func exchangeNodeInfo(ctx context.Context, cconn net.Conn, timeout time.Duration
 		return p2p.DefaultNodeInfo{}, err
 	}
 
-	errc := make(chan error, 2)
+	// Use a struct to track which operation failed
+	type opResult struct {
+		op  string // "write" or "read"
+		err error
+	}
+
+	resultChan := make(chan opResult, nodeInfoExchangeOps)
 	var remote tmp2p.DefaultNodeInfo
 
+	// Write our NodeInfo to the peer
 	go func() {
 		_, err := protoio.NewDelimitedWriter(cconn).WriteMsg(ourInfo.ToProto())
-		errc <- err
+		resultChan <- opResult{op: "write", err: err}
 	}()
 
+	// Read peer's NodeInfo
 	go func() {
 		reader := protoio.NewDelimitedReader(cconn, p2p.MaxNodeInfoSize())
 		_, err := reader.ReadMsg(&remote)
-		errc <- err
+		resultChan <- opResult{op: "read", err: err}
 	}()
 
+	var errors []error
 	completed := 0
-	for completed < 2 {
+	timeoutChan := time.After(timeout)
+
+	for completed < nodeInfoExchangeOps {
 		select {
-		case err := <-errc:
-			if err != nil {
-				return p2p.DefaultNodeInfo{}, err
-			}
+		case result := <-resultChan:
 			completed++
+			if result.err != nil {
+				errors = append(errors, fmt.Errorf("%s NodeInfo failed: %w", result.op, result.err))
+			}
 		case <-ctx.Done():
-			return p2p.DefaultNodeInfo{}, ctx.Err()
-		case <-time.After(timeout):
-			return p2p.DefaultNodeInfo{}, fmt.Errorf("timeout waiting for NodeInfo exchange")
+			return p2p.DefaultNodeInfo{}, fmt.Errorf("context cancelled during NodeInfo exchange: %w", ctx.Err())
+		case <-timeoutChan:
+			return p2p.DefaultNodeInfo{}, fmt.Errorf("timeout waiting for NodeInfo exchange (completed %d/%d operations)", completed, nodeInfoExchangeOps)
 		}
 	}
 
+	// If any operation failed, return a combined error
+	if len(errors) > 0 {
+		errMsg := "NodeInfo exchange failed:"
+		for _, err := range errors {
+			errMsg += " " + err.Error() + ";"
+		}
+		return p2p.DefaultNodeInfo{}, fmt.Errorf("%s", errMsg)
+	}
+
 	if err := cconn.SetDeadline(time.Time{}); err != nil {
-		return p2p.DefaultNodeInfo{}, err
+		return p2p.DefaultNodeInfo{}, fmt.Errorf("failed to reset deadline: %w", err)
 	}
 
 	info, err := p2p.DefaultNodeInfoFromToProto(&remote)
 	if err != nil {
-		return p2p.DefaultNodeInfo{}, err
+		return p2p.DefaultNodeInfo{}, fmt.Errorf("failed to parse NodeInfo: %w", err)
 	}
 
 	return info, nil
@@ -246,9 +232,28 @@ func buildLocalNodeInfo(privKey ed25519.PrivKey) p2p.DefaultNodeInfo {
 	}
 }
 
+// GetNodeIDByIPPort fetches node ID from a CometBFT node by its IP address and port.
+// It establishes a P2P connection, performs handshake, and returns the node ID.
+func (c *Cleaner) GetNodeIDByIPPort(ctx context.Context, ip string, port int) (string, error) {
+	addr := Addr{
+		Addr: Address{
+			ID:   "", // ID is unknown, will be fetched
+			IP:   ip,
+			Port: port,
+		},
+	}
+
+	info, err := c.fetchNodeInfo(ctx, addr)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch node info from %s:%d: %w", ip, port, err)
+	}
+
+	return string(info.DefaultNodeID), nil
+}
+
 func shortID(id string) string {
-	if len(id) <= 8 {
+	if len(id) <= shortIDLength {
 		return id
 	}
-	return id[:8]
+	return id[:shortIDLength]
 }
