@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Triggers on tags like v1.0.0, v1.2.3, etc.
+
+permissions:
+  contents: write # Required for creating releases and uploading assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.25.5
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Build binaries
+        env:
+          VERSION: ${{ steps.get_version.outputs.version }}
+        run: |
+          mkdir -p dist
+          
+          # Build flags: strip debug info and reduce binary size
+          LDFLAGS="-s -w -X main.version=${VERSION}"
+          
+          # Static linking: disable CGO for fully static binaries
+          # This ensures binaries work on any system without external dependencies
+          export CGO_ENABLED=0
+          
+          # Linux amd64
+          GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -tags netgo -o dist/bftbook-cleaner-linux-amd64 .
+          
+          # Linux arm64
+          GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -tags netgo -o dist/bftbook-cleaner-linux-arm64 .
+          
+          # macOS amd64
+          GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -tags netgo -o dist/bftbook-cleaner-darwin-amd64 .
+          
+          # macOS arm64 (Apple Silicon)
+          GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -tags netgo -o dist/bftbook-cleaner-darwin-arm64 .
+          
+          # Windows amd64
+          GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -tags netgo -o dist/bftbook-cleaner-windows-amd64.exe .
+
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/bftbook-cleaner-*
+            dist/checksums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
