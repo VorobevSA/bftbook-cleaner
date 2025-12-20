@@ -189,7 +189,7 @@ func exchangeNodeInfo(ctx context.Context, cconn net.Conn, timeout time.Duration
 				errors = append(errors, fmt.Errorf("%s NodeInfo failed: %w", result.op, result.err))
 			}
 		case <-ctx.Done():
-			return p2p.DefaultNodeInfo{}, fmt.Errorf("context cancelled during NodeInfo exchange: %w", ctx.Err())
+			return p2p.DefaultNodeInfo{}, fmt.Errorf("context canceled during NodeInfo exchange: %w", ctx.Err())
 		case <-timeoutChan:
 			return p2p.DefaultNodeInfo{}, fmt.Errorf("timeout waiting for NodeInfo exchange (completed %d/%d operations)", completed, nodeInfoExchangeOps)
 		}

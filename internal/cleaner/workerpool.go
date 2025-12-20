@@ -24,7 +24,7 @@ func startProgressReporter(
 			select {
 			case <-ticker.C:
 				current := processed.Load()
-				percent := float64(current) / float64(total) * 100
+				percent := float64(current) / float64(total) * percentMultiplier
 				logger.Printf(message, current, total, percent)
 			case <-progressCtx.Done():
 				return

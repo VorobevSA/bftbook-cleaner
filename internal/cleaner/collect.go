@@ -87,7 +87,9 @@ func (c *Cleaner) findJSONFiles() ([]string, error) {
 }
 
 func (c *Cleaner) readAddrBook(path string) (*AddrBook, []Addr, error) {
-	file, err := os.Open(path)
+	// Clean path to prevent directory traversal attacks
+	cleanPath := filepath.Clean(path)
+	file, err := os.Open(cleanPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -107,7 +109,9 @@ func (c *Cleaner) readAddrBook(path string) (*AddrBook, []Addr, error) {
 }
 
 func (c *Cleaner) readManualList(path string) ([]Addr, error) {
-	file, err := os.Open(path)
+	// Clean path to prevent directory traversal attacks
+	cleanPath := filepath.Clean(path)
+	file, err := os.Open(cleanPath)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +120,7 @@ func (c *Cleaner) readManualList(path string) ([]Addr, error) {
 	var addrs []Addr
 	scanner := bufio.NewScanner(file)
 	lineNum := 0
-	defaultTimestamp := c.now().UTC().Format(time.RFC3339)
+	defaultTimestamp := time.Now().UTC().Format(time.RFC3339)
 
 	for scanner.Scan() {
 		lineNum++
@@ -146,7 +150,7 @@ func (c *Cleaner) readManualList(path string) ([]Addr, error) {
 
 func (c *Cleaner) parseManualLine(line string) (Addr, error) {
 	parts := strings.Split(line, "@")
-	if len(parts) != 2 {
+	if len(parts) != manualListPartsCount {
 		return Addr{}, errors.New("invalid format, expected ID@IP:PORT")
 	}
 

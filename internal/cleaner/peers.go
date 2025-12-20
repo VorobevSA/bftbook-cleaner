@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync/atomic"
+	"time"
 
 	"github.com/cometbft/cometbft/crypto/ed25519"
 	"github.com/cometbft/cometbft/p2p/conn"
@@ -90,7 +91,8 @@ func (c *Cleaner) checkPeer(ctx context.Context, addr Addr) bool {
 }
 
 func (c *Cleaner) checkP2PHandshake(ctx context.Context, connection net.Conn, addr Addr) bool {
-	deadline := c.now().Add(c.cfg.Timeout / 2)
+	const timeoutDivisor = 2
+	deadline := time.Now().Add(c.cfg.Timeout / timeoutDivisor)
 	_ = connection.SetDeadline(deadline)
 
 	privKey := ed25519.GenPrivKey()

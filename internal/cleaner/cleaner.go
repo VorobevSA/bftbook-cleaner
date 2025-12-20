@@ -1,3 +1,4 @@
+// Package cleaner provides functionality for cleaning CometBFT addrbook files.
 package cleaner
 
 import (
@@ -36,6 +37,12 @@ const (
 	// Valid port range
 	minPort = 1
 	maxPort = 65535
+
+	// Manual list format: ID@IP:PORT (split by @)
+	manualListPartsCount = 2
+
+	// Percentage multiplier for progress calculation
+	percentMultiplier = 100
 )
 
 // Cleaner aggregates dependencies and orchestrates the workflow.
