@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bftbook-cleaner/internal/cleaner"
 	"context"
 	"flag"
 	"log"
@@ -9,8 +10,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
-	"bftbook-cleaner/internal/cleaner"
 )
 
 const (
