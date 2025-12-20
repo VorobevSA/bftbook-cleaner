@@ -1,3 +1,4 @@
+// Package cleaner provides functionality for cleaning CometBFT addrbook files.
 package cleaner
 
 import (
@@ -6,6 +7,7 @@ import (
 	"log"
 	"os"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -13,6 +15,34 @@ const (
 	addrBookBucketTypeNew  byte = 0x01
 	addrBookNewBucketCount      = 256
 	defaultBanTimestamp         = "0001-01-01T00:00:00Z"
+
+	// Progress reporting interval for worker pools
+	progressReportInterval = 2 * time.Second
+
+	// Maximum read timeout for basic peer response check
+	maxBasicReadTimeout = 2 * time.Second
+
+	// Buffer size for reading peer response
+	peerResponseBufferSize = 64
+
+	// Short ID display length
+	shortIDLength = 8
+
+	// Number of concurrent operations in NodeInfo exchange (read + write)
+	nodeInfoExchangeOps = 2
+
+	// CometBFT peer ID length (hex-encoded, typically 40 characters)
+	peerIDLength = 40
+
+	// Valid port range
+	minPort = 1
+	maxPort = 65535
+
+	// Manual list format: ID@IP:PORT (split by @)
+	manualListPartsCount = 2
+
+	// Percentage multiplier for progress calculation
+	percentMultiplier = 100
 )
 
 // Cleaner aggregates dependencies and orchestrates the workflow.
@@ -96,17 +126,7 @@ func mapsToSlice(peers map[string]Addr) []Addr {
 	}
 	// Keep deterministic ordering for stable output.
 	slices.SortFunc(out, func(a, b Addr) int {
-		return stringsCompare(a.Addr.ID, b.Addr.ID)
+		return strings.Compare(a.Addr.ID, b.Addr.ID)
 	})
 	return out
-}
-
-func stringsCompare(a, b string) int {
-	if a == b {
-		return 0
-	}
-	if a < b {
-		return -1
-	}
-	return 1
 }

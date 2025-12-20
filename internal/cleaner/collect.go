@@ -87,7 +87,9 @@ func (c *Cleaner) findJSONFiles() ([]string, error) {
 }
 
 func (c *Cleaner) readAddrBook(path string) (*AddrBook, []Addr, error) {
-	file, err := os.Open(path)
+	// Clean path to prevent directory traversal attacks
+	cleanPath := filepath.Clean(path)
+	file, err := os.Open(cleanPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -107,7 +109,9 @@ func (c *Cleaner) readAddrBook(path string) (*AddrBook, []Addr, error) {
 }
 
 func (c *Cleaner) readManualList(path string) ([]Addr, error) {
-	file, err := os.Open(path)
+	// Clean path to prevent directory traversal attacks
+	cleanPath := filepath.Clean(path)
+	file, err := os.Open(cleanPath)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +120,7 @@ func (c *Cleaner) readManualList(path string) ([]Addr, error) {
 	var addrs []Addr
 	scanner := bufio.NewScanner(file)
 	lineNum := 0
-	defaultTimestamp := c.now().UTC().Format(time.RFC3339)
+	defaultTimestamp := time.Now().UTC().Format(time.RFC3339)
 
 	for scanner.Scan() {
 		lineNum++
@@ -146,21 +150,36 @@ func (c *Cleaner) readManualList(path string) ([]Addr, error) {
 
 func (c *Cleaner) parseManualLine(line string) (Addr, error) {
 	parts := strings.Split(line, "@")
-	if len(parts) != 2 {
+	if len(parts) != manualListPartsCount {
 		return Addr{}, errors.New("invalid format, expected ID@IP:PORT")
 	}
 
 	id := strings.TrimSpace(parts[0])
 	addrPart := strings.TrimSpace(parts[1])
 
+	// Validate peer ID
+	if err := validatePeerID(id); err != nil {
+		return Addr{}, fmt.Errorf("invalid peer ID: %w", err)
+	}
+
 	host, portStr, err := net.SplitHostPort(addrPart)
 	if err != nil {
 		return Addr{}, fmt.Errorf("invalid address: %w", err)
 	}
 
+	// Validate IP address
+	if err := validateIPAddress(host); err != nil {
+		return Addr{}, fmt.Errorf("invalid IP address: %w", err)
+	}
+
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
 		return Addr{}, fmt.Errorf("invalid port: %w", err)
+	}
+
+	// Validate port range
+	if port < minPort || port > maxPort {
+		return Addr{}, fmt.Errorf("port must be between %d and %d, got %d", minPort, maxPort, port)
 	}
 
 	addr := Addr{
@@ -186,4 +205,33 @@ func manualBucketIndex(id string) int {
 	hasher := fnv.New32a()
 	_, _ = hasher.Write([]byte(id))
 	return int(hasher.Sum32() % uint32(addrBookNewBucketCount))
+}
+
+// validatePeerID checks if the peer ID is a valid hex string of expected length.
+func validatePeerID(id string) error {
+	if id == "" {
+		return errors.New("peer ID cannot be empty")
+	}
+	if len(id) != peerIDLength {
+		return fmt.Errorf("peer ID must be %d characters long, got %d", peerIDLength, len(id))
+	}
+	// Check if it's a valid hex string
+	for _, r := range id {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return fmt.Errorf("peer ID must be a valid hex string, found invalid character: %c", r)
+		}
+	}
+	return nil
+}
+
+// validateIPAddress checks if the provided string is a valid IP address (IPv4 or IPv6).
+func validateIPAddress(ip string) error {
+	if ip == "" {
+		return errors.New("IP address cannot be empty")
+	}
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return fmt.Errorf("invalid IP address format: %s", ip)
+	}
+	return nil
 }

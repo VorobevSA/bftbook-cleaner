@@ -1,6 +1,8 @@
+// Package main provides the command-line interface for the BFTbook Cleaner tool.
 package main
 
 import (
+	"bftbook-cleaner/internal/cleaner"
 	"context"
 	"flag"
 	"log"
@@ -8,8 +10,11 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+)
 
-	"bftbook-cleaner/internal/cleaner"
+const (
+	defaultWorkers        = 50
+	defaultTimeoutSeconds = 5
 )
 
 func main() {
@@ -17,8 +22,9 @@ func main() {
 	flag.StringVar(&cfg.InputDir, "input", "input", "Directory containing input JSON files")
 	flag.StringVar(&cfg.OutputFile, "output", "output.addrbook.json", "Output file path")
 	flag.StringVar(&cfg.ManualList, "manual-list", "", "Path to manual list file with peers in format ID@IP:PORT (one per line)")
-	flag.IntVar(&cfg.Workers, "workers", 50, "Number of concurrent workers for peer checking")
-	flag.DurationVar(&cfg.Timeout, "timeout", 5*time.Second, "Timeout for peer connection and NodeInfo requests")
+
+	flag.IntVar(&cfg.Workers, "workers", defaultWorkers, "Number of concurrent workers for peer checking")
+	flag.DurationVar(&cfg.Timeout, "timeout", defaultTimeoutSeconds*time.Second, "Timeout for peer connection and NodeInfo requests")
 	flag.StringVar(&cfg.FilterNetwork, "network", "", "Filter peers by NodeInfo network (optional)")
 	flag.StringVar(&cfg.FilterVersion, "version", "", "Filter peers by NodeInfo version (optional)")
 	flag.BoolVar(&cfg.Verbose, "verbose", false, "Enable verbose logging")

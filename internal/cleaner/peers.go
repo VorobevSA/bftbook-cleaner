@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -23,59 +22,25 @@ func (c *Cleaner) checkPeers(ctx context.Context, addrs []Addr) ([]Addr, error) 
 	var processed atomic.Int64
 	total := int64(len(addrs))
 
-	// Progress reporter.
-	progressCtx, progressCancel := context.WithCancel(context.Background())
+	// Progress reporter
+	progressCancel := startProgressReporter(
+		&processed,
+		total,
+		"Progress: %d/%d peers checked (%.1f%%)",
+		c.log,
+	)
 	defer progressCancel()
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				current := processed.Load()
-				percent := float64(current) / float64(total) * 100
-				c.log.Printf("Progress: %d/%d peers checked (%.1f%%)", current, total, percent)
-			case <-progressCtx.Done():
-				return
-			}
-		}
-	}()
 
-	var wg sync.WaitGroup
-	for i := 0; i < c.cfg.Workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case addr, ok := <-addrChan:
-					if !ok {
-						return
-					}
-					valid := c.checkPeer(ctx, addr)
-					select {
-					case <-ctx.Done():
-						return
-					case resultChan <- peerCheckResult{addr: addr, valid: valid}:
-					}
-				}
-			}
-		}()
-	}
+	// Start workers
+	wg := startWorkers(ctx, c.cfg.Workers, addrChan, resultChan, func(ctx context.Context, addr Addr) peerCheckResult {
+		valid := c.checkPeer(ctx, addr)
+		return peerCheckResult{addr: addr, valid: valid}
+	})
 
-	go func() {
-		defer close(addrChan)
-		for _, addr := range addrs {
-			select {
-			case <-ctx.Done():
-				return
-			case addrChan <- addr:
-			}
-		}
-	}()
+	// Feed items to workers
+	feedItems(ctx, addrs, addrChan)
 
+	// Close result channel when all workers are done
 	go func() {
 		wg.Wait()
 		close(resultChan)
@@ -126,7 +91,8 @@ func (c *Cleaner) checkPeer(ctx context.Context, addr Addr) bool {
 }
 
 func (c *Cleaner) checkP2PHandshake(ctx context.Context, connection net.Conn, addr Addr) bool {
-	deadline := c.now().Add(c.cfg.Timeout / 2)
+	const timeoutDivisor = 2
+	deadline := time.Now().Add(c.cfg.Timeout / timeoutDivisor)
 	_ = connection.SetDeadline(deadline)
 
 	privKey := ed25519.GenPrivKey()
@@ -151,12 +117,12 @@ func (c *Cleaner) checkPeerBasicResponse(ctx context.Context, addr Addr) bool {
 	defer closeWithLog(c.log, conn, address, c.cfg.Verbose)
 
 	readTimeout := c.cfg.Timeout
-	if readTimeout > 2*time.Second {
-		readTimeout = 2 * time.Second
+	if readTimeout > maxBasicReadTimeout {
+		readTimeout = maxBasicReadTimeout
 	}
 	_ = conn.SetReadDeadline(c.now().Add(readTimeout))
 
-	buffer := make([]byte, 64)
+	buffer := make([]byte, peerResponseBufferSize)
 	n, _ := conn.Read(buffer)
 	return n > 0
 }
