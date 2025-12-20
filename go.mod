@@ -1,6 +1,6 @@
 module bftbook-cleaner
 
-go 1.25
+go 1.25.5
 
 require github.com/cometbft/cometbft v0.38.19
 
