@@ -2,7 +2,7 @@ module bftbook-cleaner
 
 go 1.25.5
 
-require github.com/cometbft/cometbft v0.38.19
+require github.com/cometbft/cometbft v0.38.21
 
 require (
 	github.com/DataDog/zstd v1.4.5 // indirect
